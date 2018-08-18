@@ -1,0 +1,395 @@
+
+#include <asf.h>
+//#include <math.h>
+
+
+void clockSetup(void);
+void EICsetup(void);
+void wait(volatile int d);
+void portSetup(void);
+void uartSetup(void);
+void write(volatile char *c);
+void ADCsetup(void);
+void Adcc(void);
+void convert(int t);
+void Timer4Setup(void);
+//void I2Csetup(void);
+
+
+int main (void){
+	
+	system_init();
+ 	clockSetup();
+	EICsetup();
+	portSetup();
+	uartSetup();
+	ADCsetup();
+	Timer4Setup();
+	//I2Csetup();
+
+
+	
+	
+	
+	while(1){	
+		Port *port = PORT;
+		PortGroup *porB = &(port->Group[1]);
+		porB->DIRSET.reg = 1;
+		porB->OUTSET.reg = PORT_PB00;
+		porB->OUTCLR.reg = PORT_PB00;
+		porB->OUTSET.reg = PORT_PB00;
+
+
+	}
+}
+
+// setting up a clock
+void clockSetup(void){
+//setting up the clock source
+
+	/* Various bits in the INTFLAG register can be set to one at startup.
+		This will ensure that these bits are cleared */
+	SYSCTRL->INTFLAG.reg = SYSCTRL_INTFLAG_BOD33RDY | SYSCTRL_INTFLAG_BOD33DET | SYSCTRL_INTFLAG_DFLLRDY;
+	SYSCTRL->OSC8M.bit.PRESC = 3;	//divide the clock by 8	so 1MHz still
+	SYSCTRL->OSC8M.bit.ONDEMAND = 1;	//clock is off is no peripheral request
+	SYSCTRL->OSC8M.bit.RUNSTDBY = 0;	//clock is off in sleep mode
+	SYSCTRL->OSC8M.reg |= 1<<1;	//enable clock
+	//SYSCTRL->OSC8M.bit.FRANGE = 2;	//yet another way to control manipulate the clock freq	
+	
+//setting up the clock generator
+
+	GCLK->CTRL.bit.SWRST = 1;	//reset the generators
+	while (GCLK->STATUS.bit.SYNCBUSY){}	//waiting for the reset to complete  
+		
+	//this section sets up division for chosen Genclk
+	GCLK->GENDIV.bit.ID = 0;	//genclk 0 to be divided in next instruction
+	GCLK->GENDIV.bit.DIV = 1;	//divide genclk o by 1
+
+	//this section enables chosen Genclk and configures it
+
+	GCLK->GENCTRL.bit.ID = 0;	//select genclk 0 to be enabled in next instr
+	GCLK->GENCTRL.bit.GENEN = 1; //ENABLE genclk 0
+	GCLK->GENCTRL.bit.OE = 1;	//enable clock as output
+	//GCLK->GENCTRL.bit.SRC = 6;	//choose 8MHz clock as source
+	GCLK->GENCTRL.bit.SRC = 3;	//choose 32KHz clock as source
+	GCLK->GENCTRL.bit.DIVSEL = 0;	//source is not divided
+	//GCLK->GENCTRL.reg |= GCLK_GENCTRL_DIVSEL | GCLK_GENCTRL_GENEN | G
+	
+	//this section chooses what Genclk goes to what peripheral
+	while (GCLK->STATUS.bit.SYNCBUSY){}	//waiting for sync to complete  
+	GCLK->CLKCTRL.reg |= 0<<14;	//disable clock
+
+
+	//GCLK->CLKCTRL.reg |= GCLK_CLKCTRL_ID_EIC ; ///what peripheral are we going to use with thus generator  pg 129
+	//GCLK->CLKCTRL.reg |= GCLK_CLKCTRL_GEN_GCLK0;	//selecting gen clock 0
+	//GCLK->CLKCTRL.reg |= 1<<14;	//enable clock
+	GCLK->CLKCTRL.reg = GCLK_CLKCTRL_ID_EIC | GCLK_CLKCTRL_GEN_GCLK0 | 1<<14;	//setup genclk for EIC...this is a single write method i believe
+	GCLK->CLKCTRL.reg = GCLK_CLKCTRL_ID_SERCOM4_CORE | GCLK_CLKCTRL_GEN_GCLK0 | 1<<14;	//setup genclk for sercom4
+	GCLK->CLKCTRL.reg = GCLK_CLKCTRL_ID_ADC | GCLK_CLKCTRL_GEN_GCLK0 | 1<<14;	//setup genclk for ADC
+	//kGCLK->CLKCTRL.reg = GCLK_CLKCTRL_ID_TC4_TC5 | GCLK_CLKCTRL_GEN_GCLK0 | 1<<14;	//setup genCLK for TC4
+	
+	GCLK->CLKCTRL.reg = GCLK_CLKCTRL_ID_SERCOM2_CORE | GCLK_CLKCTRL_GEN_GCLK0 | 1<<14;	//setup genCLK for SERCOM2Core
+	GCLK->CLKCTRL.reg = GCLK_CLKCTRL_ID_SERCOMX_SLOW| GCLK_CLKCTRL_GEN_GCLK0 | 1<<14;	//setup genCLK for SERCOM2Slow
+
+	
+
+	while (GCLK->STATUS.bit.SYNCBUSY==1){}	//waiting for sync to complete  
+		
+// setting up the CPU and APB and AHB buses clocks
+	PM->CPUSEL.bit.CPUDIV = 0;	//divide CPU clock by 1	pg 15
+	PM->APBASEL.bit.APBADIV = 0;	//divide apba bus by 1
+	PM->APBBSEL.bit.APBBDIV = 0;	//divide apbb bus by 1 
+	PM->APBCSEL.bit.APBCDIV = 0;	//divide apbc bus by 1
+	PM->APBAMASK.reg |= 1<<3;	//enable the GCLK clock DONT THINK NECESSARY they should be enabled by default pg 159
+	PM->APBAMASK.reg |= 1<<6;	//enable the EIC APB
+	PM->APBCMASK.reg |= 1<<6;	//enable the SERCOM4 APB
+	PM->APBCMASK.reg |= 1<<16;	//enable the ADC APB
+	PM->APBCMASK.reg |= PM_APBCMASK_TC4;	//enable the TC4 APB
+	
+	PM->APBCMASK.reg |= PM_APBCMASK_SERCOM2;	//enable the SERCOM2 APB
+
+
+
+}
+
+void EICsetup(void){
+	//might need to disable EIC first
+	EIC->CTRL.bit.SWRST = 1;	//reset the EIC and disables the EIC
+	while(EIC->STATUS.bit.SYNCBUSY){}	//wait for synchronization
+	EIC->INTENSET.reg = 1<<6;	//enables PA06 for external interrupt
+	EIC->CONFIG[0].bit.SENSE6 = 1;	//select rising edge as triggering ...config[n]..(n*8+x)=y...EXT[y]....SENSEx...n=0|1 
+	EIC->CTRL.reg |= 1<<1;	//enable the EIC at the end 
+	NVIC->ISER[0] = 1<<4;	//enable the NVIC handler
+}
+
+void portSetup(void){
+	Port *por = PORT;
+	PortGroup *porB = &(por->Group[1]);
+	porB->DIRSET.reg = 1;	//setting up PB00 as output
+	PortGroup *porA = &(por->Group[0]);
+	porA->DIRCLR.reg = 1<<4;	//setting up PB06 as input
+	porA->PMUX[3].bit.PMUXE = 0;	//mux the EIC to pin PA06 (6=2*n)	EXTINT[6]
+	porA->PINCFG[6].bit.PMUXEN =1;	//enable the MUX
+	//porA->PINCFG[6].bit.INEN =1;	//allows us to setup input and see it (not needed for EIC)
+	//porA->PINCFG[6].bit.PULLEN =1;	//allows us to pull on pin,  we need INEN to do this
+	//porA->OUT.reg |= 0<<6;	//needed to make oull down
+	porB->DIRSET.reg |= 1<<8;	//setup PB08 as transmit pin
+	porB->DIRCLR.reg = 1<<9;	//setup PB09 as receive pin ***note cannot do |= must do = only, it fucks it up****
+	porB->PMUX[4].bit.PMUXE = 3;	//mux the Sercomm4 to pin PB08 (8=2*n)
+	porB->PINCFG[8].bit.PMUXEN =1;	//enable the MUX
+	porB->PMUX[4].bit.PMUXO = 3;	//mux the Sercomm4 to pin PB09 (9=2*n+1)
+	porB->PINCFG[9].bit.PMUXEN=1;	//enable the MUX
+	
+	/*******might not need to setup as input.output if using other functions like sercom EIC and ADC*************/
+	
+	porA->PMUX[2].bit.PMUXE = 0;	//mux the ADC to pin PA04 (6=2*n)	AIN[4]
+	porA->PINCFG[4].bit.PMUXEN =1;	//enable the MUX
+	
+	porA->PMUX[6].bit.PMUXE = 2;	//mux the Sercomm2 to pin PA12 (8=2*n)
+	porA->PINCFG[12].bit.PMUXEN =1;	//enable the MUX
+	porA->PMUX[6].bit.PMUXO = 2;	//mux the Sercomm2 to pin PA13 (9=2*n+1)
+	porA->PINCFG[13].bit.PMUXEN=1;	//enable the MUX
+	
+
+}
+
+void wait(volatile int d){
+	int count = 0;
+	while (count < d*1000){
+		count++;
+	}
+}
+void uartSetup(void){
+	Sercom *ser = SERCOM4;
+	SercomUsart *uart = &(ser->USART);
+	uart->CTRLA.reg = 0;	//disable the uart,  following registers are enable protected
+	while(uart->SYNCBUSY.reg){}	//wait for enable to sync 
+	uart->CTRLA.bit.SWRST = 1;	//reset
+	while(uart->SYNCBUSY.bit.SWRST==1){}	//wait for reset to sync
+	uart->CTRLA.bit.CMODE = 0;	//asynchronous mode
+	uart->CTRLA.bit.MODE = 1;	// internal clock
+	uart->CTRLA.bit.RXPO = 1;	//sercom4 pad 1 for rx (pB09)	
+	uart->CTRLA.bit.TXPO = 0;	//sercom4 pad 0 for tx (pB08)
+	uart->CTRLA.bit.DORD = 1;	//LSB transfer first
+	uart->CTRLB.bit.CHSIZE = 0;	//character size 8 bits
+	uart->CTRLB.bit.SBMODE = 0;	//1 bit stop mode
+	uart->CTRLB.bit.SFDE = 1;	//frame detection enabled, wake up device upon rx
+	uart->BAUD.reg = 26214;	//baud rate ==9600
+	uart->CTRLB.bit.TXEN = 1;	//enable the TX 
+	uart->CTRLB.bit.RXEN = 1;	//enable the RX
+	while(uart->SYNCBUSY.bit.CTRLB==1){}	//wait for CTRLB reg to sync 
+	uart->CTRLA.reg |= 1<<1;	//enable the uart
+	//while(uart->SYNCBUSY.reg){}	//wait for enable reg to sync 
+
+	uart->INTENSET.bit.RXC = 1;	//set interrupt on recieve complete
+	NVIC->ISER[0] = 1<<13;	//enable the NVIC handler for sercom4
+	
+} 
+
+void EIC_Handler(void){
+	Port *port = PORT;
+	PortGroup *porB = &(port->Group[1]);
+	porB->DIRSET.reg = 1<<2;
+	porB->OUTTGL.reg = PORT_PB02;
+	EIC->INTFLAG.reg = 1<<6;	//clear the int flag
+	
+}
+
+void write(volatile char *cd){
+	Sercom *ser = SERCOM4;
+	SercomUsart *uart = &(ser->USART);
+	char *be;
+	be = cd;
+	volatile int i = 4;
+
+	while(i != 0){
+		while(uart->INTFLAG.bit.DRE==0){}	//wait for register to clear before writing to 
+		uart->DATA.reg = *be++;
+		while((uart->INTFLAG.bit.TXC)==0){}	// waiting for transmit to complete
+		i--;
+	}
+	uart->DATA.reg = 10;	//creates a new line in terminal
+	
+		Port *port = PORT;
+		PortGroup *porA = &(port->Group[0]);
+		porA->DIRSET.reg = 1<<10;
+		porA->OUTCLR.reg = PORT_PA10;	//turn off power to sensor
+		ADC->CTRLA.reg = 0<<1;	//disable ADC
+		while (ADC->STATUS.bit.SYNCBUSY==1){}	//wait for enable to complete
+		Tc *tc = TC4;
+		
+		TcCount16 *tcc = &tc->COUNT16;	
+		tcc->CTRLBSET.bit.CMD = 1;	//turn on retrigger
+		while(tcc->STATUS.bit.SYNCBUSY){}	//wait for sync of enable
+
+		
+}
+
+void ADCsetup(void){
+	ADC->CTRLA.reg = 0<<1;	//disable so that we can reset
+	while (ADC->STATUS.bit.SYNCBUSY==1){}	//wait for disable to complete
+	ADC->CTRLA.bit.SWRST = 1;	//reset
+	while (ADC->STATUS.bit.SYNCBUSY==1){}	//wait for reset to complete
+	ADC->REFCTRL.reg = ADC_REFCTRL_REFSEL_AREFA;	//external ref VREFA
+	ADC->CTRLB.reg = ADC_CTRLB_PRESCALER_DIV512 | ADC_CTRLB_RESSEL_10BIT | ADC_CTRLB_FREERUN | 0<<0;
+	while (ADC->STATUS.bit.SYNCBUSY==1){}	//wait for sync to complete
+	ADC->INPUTCTRL.reg = ADC_INPUTCTRL_MUXNEG_PIN0 | ADC_INPUTCTRL_MUXPOS_PIN4;	//pin0=AIN0=PA02, pin4=AIN4=PB04
+	while (ADC->STATUS.bit.SYNCBUSY==1){}	//wait for sync to complete
+		
+	//uint8_t *a;
+	//a = NVMCTRL_OTP4 + 4;	//ADC linearity calibration
+	//uint8_t b = *a;
+	ADC->CALIB.bit.BIAS_CAL = 7;
+	//ADC->CTRLB.bit.CORREN = 1;
+	//ADC->OFFSETCORR.reg = 37;
+	//ADC->GAINCORR.reg = 1;
+	//
+		
+	ADC->SWTRIG.bit.START = 1;	//start conversion
+	while (ADC->STATUS.bit.SYNCBUSY==1){}	//wait for sync to complete
+	ADC->INTENSET.reg = ADC_INTENSET_RESRDY;	//setup interrupt when reg is ready to be read	
+	//ADC->CTRLA.reg = 1<<1;	//enable ADC
+	//while (ADC->STATUS.bit.SYNCBUSY==1){}	//wait for enable to complete
+	NVIC->ISER[0] |= 1<<23;	//enable the NVIC handler
+
+	//volatile int *AdcLin = (int *)0x806028;	//finding cal
+}
+
+
+void ADC_Handler(void){
+	
+	volatile int a = ADC->RESULT.reg;
+	convert(a);
+	
+}
+
+void convert(int t){
+	volatile int a = t;
+	int i = 1000;   //divisor
+	int j = 0;  //array counter
+	//int a = 4312;   // our value
+	volatile char arrADC[4];
+	volatile char *arrPtr;
+	arrPtr = arrADC;
+	int m = 1;  //counter
+	int n = 1000;    //increment ot divisor
+
+	while(j <= 3){
+		int b = a % i;
+		if(b == a) {
+			int p = (m-1);
+			switch(p) {
+				case 0:
+				arrADC[j++] = '0';
+				break;
+				case 1:
+				arrADC[j++] = '1';
+				break;
+				case 2:
+				arrADC[j++] = '2';
+				break;
+				case 3:
+				arrADC[j++] = '3';
+				break;
+				case 4:
+				arrADC[j++] = '4';
+				break;
+				case 5:
+				arrADC[j++] = '5';
+				break;
+				case 6:
+				arrADC[j++] = '6';
+				break;
+				case 7:
+				arrADC[j++] = '7';
+				break;
+				case 8:
+				arrADC[j++] = '8';
+				break;
+				case 9:
+				arrADC[j++] = '9';
+				break;
+				default:
+				arrADC[j++] = 'G';
+				break;
+			}
+			a = a - (n*(m-1));
+			m = 1;
+
+			if(j == 1){
+				i = 100;
+				n = 100;
+			}
+			if(j == 2){
+				i = 10;
+				n = 10;
+			}
+			if(j == 3){
+				i = 1;
+				n = 1;
+			}
+		}
+		else{
+			m++;
+			i = i + n;
+		}
+	}
+	//write(arrPtr);
+}
+
+void Timer4Setup(void){
+	Tc *tc = TC4;
+	TcCount16 *tcc = &tc->COUNT16;
+	tcc->CTRLA.reg = 0;	//disable the TC4
+	while(tcc->STATUS.bit.SYNCBUSY){}	//wait for sync of disable
+	tcc->CTRLA.bit.WAVEGEN = 0;	//normal frequency
+	tcc->CTRLA.bit.PRESCALER = 5;	//divide by 0;
+	tcc->CTRLA.bit.WAVEGEN = 0;	//normal frequency
+	tcc->CTRLA.bit.MODE = 2;	//16 bit mode
+	tcc->CTRLBSET.bit.ONESHOT = 1;	//turn on one shot mode
+	while(tcc->STATUS.bit.SYNCBUSY){}	//wait for sync to complete	
+	//tcc->EVCTRL.bit.OVFEO = 1;	//event is generated from over/underflow
+	tcc->INTENSET.bit.OVF = 1;	//enable the overflow interrupt
+	//tcc->COUNT.reg = 0xFFF1;
+	while(tcc->STATUS.bit.SYNCBUSY){}	//wait for sync to complete	
+	tcc->CTRLA.reg = 1<<1;	//enable the TC4
+	while(tcc->STATUS.bit.SYNCBUSY){}	//wait for sync of enable
+	NVIC->ISER[0] |= 1<<19;	//enable the NVIC handler for TC4
+
+}
+
+void TC4_Handler(void){
+	Port *port = PORT;
+	PortGroup *porA = &(port->Group[0]);
+	porA->DIRSET.reg = 1<<10;
+	porA->OUTSET.reg = PORT_PA10;	//turn on power to sensor
+	ADC->CTRLA.reg = 1<<1;	//enable ADC
+	while (ADC->STATUS.bit.SYNCBUSY==1){}	//wait for enable to complete
+	Tc *tc = TC4;
+	TcCount16 *tcc = &tc->COUNT16;
+	tcc->INTFLAG.bit.OVF = 1;	//clear the interrupt
+	
+	
+}
+
+void I2Csetup(void){
+	Sercom *ser = SERCOM2;
+	SercomUsart *i2c = &(ser->USART);
+
+}
+
+void SERCOM4_Handler(void){
+	Sercom *ser = SERCOM4;
+	SercomUsart *uart = &(ser->USART);
+	volatile char array[4];
+	static int i = 0;
+	if(i < 4){
+		array[i++] = uart->DATA.reg;
+	}
+	else{
+		i=0;
+	}
+}
+void _WFI(void);
+
+//SCB
